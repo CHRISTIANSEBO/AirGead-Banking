@@ -1,0 +1,19 @@
+# Temporary extraction directory (from AIRGEAD BANKING.zip)
+extracted/
+
+# Visual Studio build artifacts
+*.exe
+*.pdb
+*.ilk
+*.obj
+x64/
+Debug/
+Release/
+*.user
+.vs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
