@@ -6,6 +6,7 @@
 
 import os
 import sys
+import anthropic
 
 
 # ─────────────────────────────────────────────
@@ -69,6 +70,136 @@ class InvestmentCalculator:
 
 
 # ─────────────────────────────────────────────
+# Tool use: natural language → investment params
+# ─────────────────────────────────────────────
+
+# Tool definition sent to Claude so it knows what structured data to return.
+# Two tools: one for a complete parameter set, one to ask a clarifying question.
+INVESTMENT_TOOLS = [
+    {
+        "name": "run_investment_calculator",
+        "description": (
+            "Called when all four investment parameters are clearly present in the "
+            "user's message. Extracts and returns them as structured data."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "initial_investment": {
+                    "type": "number",
+                    "description": "Starting lump-sum in dollars (e.g. 5000)",
+                },
+                "monthly_deposit": {
+                    "type": "number",
+                    "description": "Recurring monthly contribution in dollars (e.g. 200)",
+                },
+                "annual_interest_rate": {
+                    "type": "number",
+                    "description": "Annual return rate as a percentage (e.g. 7 for 7%)",
+                },
+                "years": {
+                    "type": "integer",
+                    "description": "Investment horizon in whole years (e.g. 20)",
+                },
+            },
+            "required": ["initial_investment", "monthly_deposit", "annual_interest_rate", "years"],
+        },
+    },
+    {
+        "name": "request_clarification",
+        "description": (
+            "Called when one or more parameters are missing or ambiguous. "
+            "Asks the user a focused question to get the missing information."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "A friendly, specific question asking for the missing details.",
+                }
+            },
+            "required": ["question"],
+        },
+    },
+]
+
+
+def parse_investment_goal(client: anthropic.Anthropic, user_text: str) -> dict:
+    """
+    Send the user's free-text description to Claude with the tool definitions.
+
+    Returns one of:
+      {"tool": "run_investment_calculator", "params": {...}}  — all values found
+      {"tool": "request_clarification",     "question": "..."} — something missing
+    """
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=512,
+        tools=INVESTMENT_TOOLS,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Extract investment parameters from the description below.\n"
+                    "Use run_investment_calculator if you have all four values.\n"
+                    "Use request_clarification if anything is missing or unclear.\n\n"
+                    f"Description: {user_text}"
+                ),
+            }
+        ],
+    )
+
+    for block in response.content:
+        if block.type == "tool_use":
+            if block.name == "run_investment_calculator":
+                return {"tool": "run_investment_calculator", "params": block.input}
+            if block.name == "request_clarification":
+                return {"tool": "request_clarification", "question": block.input["question"]}
+
+    # Fallback — Claude didn't call a tool (shouldn't happen, but handle gracefully)
+    return {
+        "tool": "request_clarification",
+        "question": "Could you share your starting amount, monthly savings, expected return rate, and how many years you plan to invest?",
+    }
+
+
+def natural_language_mode(client: anthropic.Anthropic):
+    """
+    Let the user describe their investment goal in plain English.
+    Loop until Claude has all four parameters, then run the calculator.
+    """
+    print("\nDescribe your investment goal in plain English.")
+    print('Example: "I have $3k saved, can add $150/month, expecting 7%, retiring in 25 years."\n')
+
+    while True:
+        user_text = input("> ").strip()
+        if not user_text:
+            continue
+
+        print("\nParsing your goal...\n")
+        result = parse_investment_goal(client, user_text)
+
+        if result["tool"] == "request_clarification":
+            print(f"  Claude: {result['question']}\n")
+            continue
+
+        # All parameters extracted — confirm with user before running
+        p = result["params"]
+        print("  Extracted parameters:")
+        print(f"    Initial investment : ${p['initial_investment']:,.2f}")
+        print(f"    Monthly deposit    : ${p['monthly_deposit']:,.2f}")
+        print(f"    Annual rate        : {p['annual_interest_rate']}%")
+        print(f"    Years              : {p['years']}")
+        confirm = input("\n  Run calculation with these values? [Y/n]: ").strip().lower()
+        if confirm in ("n", "no"):
+            print("\n  Let's try again — describe your goal:\n")
+            continue
+
+        return p["initial_investment"], p["monthly_deposit"], p["annual_interest_rate"], p["years"]
+
+
+# ─────────────────────────────────────────────
 # AI Financial Advisor powered by Claude
 # ─────────────────────────────────────────────
 class AIFinancialAdvisor:
@@ -78,22 +209,8 @@ class AIFinancialAdvisor:
     Requires the ANTHROPIC_API_KEY environment variable to be set.
     """
 
-    def __init__(self):
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise EnvironmentError(
-                "\n[AI Advisor] ANTHROPIC_API_KEY environment variable is not set.\n"
-                "  Get a free key at https://console.anthropic.com and run:\n"
-                "  export ANTHROPIC_API_KEY='your-key-here'\n"
-            )
-        try:
-            import anthropic
-            self._client = anthropic.Anthropic(api_key=api_key)
-        except ImportError:
-            raise ImportError(
-                "The 'anthropic' package is not installed.\n"
-                "  Run: pip install anthropic"
-            )
+    def __init__(self, client: anthropic.Anthropic):
+        self._client = client
 
     def get_advice(self, calculator: InvestmentCalculator) -> str:
         """Build a prompt from the calculator results and call Claude."""
@@ -122,7 +239,6 @@ Please provide:
 
 Keep your response encouraging, concise (under 200 words), and jargon-free."""
 
-        import anthropic
         message = self._client.messages.create(
             model="claude-opus-4-6",
             max_tokens=512,
@@ -158,6 +274,14 @@ def get_positive_int(prompt: str) -> int:
             print("  Invalid input. Please enter a whole number.")
 
 
+def build_client() -> anthropic.Anthropic | None:
+    """Create and return an Anthropic client, or None if no API key is set."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    return anthropic.Anthropic(api_key=api_key)
+
+
 def main():
     print("=" * 54)
     print("    Welcome to the Airgead Banking Investment Calculator")
@@ -165,38 +289,57 @@ def main():
     print("=" * 54)
     print()
 
-    # Collect user input
-    initial_investment = get_positive_float("Enter initial investment amount: $")
-    monthly_deposit    = get_positive_float("Enter monthly deposit amount:   $")
-    annual_rate        = get_positive_float("Enter annual interest rate (%): ")
-    years              = get_positive_int(  "Enter number of years to invest: ")
+    client = build_client()
 
-    # Run calculations
+    # ── Input mode selection ──────────────────────────────────
+    if client:
+        print("How would you like to enter your investment details?")
+        print("  [1] Guided input  (answer prompts one by one)")
+        print("  [2] Describe goal (type naturally, AI extracts values)")
+        print()
+        choice = input("Choose [1/2]: ").strip()
+    else:
+        print("[Note] ANTHROPIC_API_KEY not set — using guided input only.")
+        print("       Set it to unlock AI-powered natural language input and advice.\n")
+        choice = "1"
+
+    print()
+
+    # ── Collect parameters ────────────────────────────────────
+    if choice == "2" and client:
+        initial_investment, monthly_deposit, annual_rate, years = natural_language_mode(client)
+    else:
+        initial_investment = get_positive_float("Enter initial investment amount: $")
+        monthly_deposit    = get_positive_float("Enter monthly deposit amount:   $")
+        annual_rate        = get_positive_float("Enter annual interest rate (%): ")
+        years              = get_positive_int(  "Enter number of years to invest: ")
+
+    # ── Run calculations ──────────────────────────────────────
     calculator = InvestmentCalculator(initial_investment, monthly_deposit, annual_rate, years)
     calculator.calculate_without_monthly_deposits()
     calculator.calculate_with_monthly_deposits()
 
-    # Display tables
+    # ── Display tables ────────────────────────────────────────
     print("\n" + "=" * 54)
     print("                  INVESTMENT PROJECTIONS")
     print("=" * 54)
     calculator.display_results()
 
-    # AI Financial Advisor
+    # ── AI Financial Advisor ──────────────────────────────────
     print("=" * 54)
     print("              AI FINANCIAL ADVISOR (Claude)")
     print("=" * 54)
 
-    try:
-        advisor = AIFinancialAdvisor()
-        print("\nAnalyzing your investment plan...\n")
-        advice = advisor.get_advice(calculator)
-        print(advice)
-    except EnvironmentError as e:
-        print(e)
-        print("[Tip] The calculator still works perfectly without the AI advisor.")
-    except Exception as e:
-        print(f"\n[AI Advisor] Could not retrieve advice: {e}")
+    if client:
+        try:
+            advisor = AIFinancialAdvisor(client)
+            print("\nAnalyzing your investment plan...\n")
+            advice = advisor.get_advice(calculator)
+            print(advice)
+        except Exception as e:
+            print(f"\n[AI Advisor] Could not retrieve advice: {e}")
+    else:
+        print("\n[AI Advisor] Set ANTHROPIC_API_KEY to receive personalised advice.")
 
     print("\n" + "=" * 54)
 
