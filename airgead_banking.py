@@ -204,49 +204,73 @@ def natural_language_mode(client: anthropic.Anthropic):
 # ─────────────────────────────────────────────
 class AIFinancialAdvisor:
     """
-    Sends investment data to Claude and returns personalised financial advice.
+    Multi-turn AI financial advisor powered by Claude.
 
-    Requires the ANTHROPIC_API_KEY environment variable to be set.
+    Maintains conversation history so the user can ask follow-up questions
+    without re-explaining their investment parameters each time.
     """
+
+    # Persistent persona — sent as system= on every call, never part of messages[].
+    SYSTEM = (
+        "You are a friendly financial advisor helping a high-school student understand "
+        "compound interest and smart saving habits. Keep responses encouraging, "
+        "concise (under 200 words), and jargon-free."
+    )
 
     def __init__(self, client: anthropic.Anthropic):
         self._client = client
+        self._messages: list[dict] = []  # full conversation history
 
-    def stream_advice(self, calculator: InvestmentCalculator) -> None:
-        """Stream investment advice token-by-token directly to stdout."""
-        final_no_dep = calculator.results_no_deposit[-1]
-        final_with_dep = calculator.results_with_deposit[-1]
-
-        prompt = f"""You are a friendly financial advisor helping a high-school student understand
-compound interest and smart saving habits.
-
-Here are the investment details they entered:
-- Initial investment: ${calculator.initial_investment:,.2f}
-- Monthly deposit: ${calculator.monthly_deposit:,.2f}
-- Annual interest rate: {calculator.annual_interest_rate}%
-- Investment period: {calculator.number_of_years} years
-
-Results after {calculator.number_of_years} years:
-- WITHOUT monthly deposits → Balance: ${final_no_dep.balance:,.2f}
-- WITH monthly deposits    → Balance: ${final_with_dep.balance:,.2f}
-- Extra gained by making monthly deposits: ${final_with_dep.balance - final_no_dep.balance:,.2f}
-
-Please provide:
-1. A plain-English explanation of what these numbers mean
-2. One concrete takeaway about the power of regular contributions
-3. One practical tip the student can act on today to improve their financial future
-4. A brief note on whether the interest rate they used is realistic
-
-Keep your response encouraging, concise (under 200 words), and jargon-free."""
+    def _stream_turn(self, user_content: str) -> None:
+        """Append a user turn, stream Claude's response, append reply to history."""
+        self._messages.append({"role": "user", "content": user_content})
 
         with self._client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            system=self.SYSTEM,
+            messages=self._messages,
         ) as stream:
             for text in stream.text_stream:
                 print(text, end="", flush=True)
+            # Capture the full reply after streaming so it can be stored in history.
+            reply = stream.get_final_text()
         print()
+
+        self._messages.append({"role": "assistant", "content": reply})
+
+    def chat(self, calculator: InvestmentCalculator) -> None:
+        """Stream initial advice, then loop for follow-up questions."""
+        final_no_dep  = calculator.results_no_deposit[-1]
+        final_with_dep = calculator.results_with_deposit[-1]
+
+        initial = (
+            f"Here are the investment details:\n"
+            f"- Initial investment: ${calculator.initial_investment:,.2f}\n"
+            f"- Monthly deposit:    ${calculator.monthly_deposit:,.2f}\n"
+            f"- Annual rate:         {calculator.annual_interest_rate}%\n"
+            f"- Period:              {calculator.number_of_years} years\n\n"
+            f"Results after {calculator.number_of_years} years:\n"
+            f"- Without monthly deposits → ${final_no_dep.balance:,.2f}\n"
+            f"- With monthly deposits    → ${final_with_dep.balance:,.2f}\n"
+            f"- Extra from deposits:       ${final_with_dep.balance - final_no_dep.balance:,.2f}\n\n"
+            f"Please provide:\n"
+            f"1. A plain-English explanation of what these numbers mean\n"
+            f"2. One concrete takeaway about the power of regular contributions\n"
+            f"3. One practical tip the student can act on today\n"
+            f"4. A brief note on whether the interest rate is realistic"
+        )
+
+        self._stream_turn(initial)
+
+        print("\n  Ask a follow-up question, or press Enter to exit.\n")
+        while True:
+            user_input = input("You: ").strip()
+            if not user_input:
+                break
+            print("\nAdvisor: ", end="")
+            self._stream_turn(user_input)
+            print()
 
 
 # ─────────────────────────────────────────────
@@ -336,7 +360,7 @@ def main():
         try:
             advisor = AIFinancialAdvisor(client)
             print("\nAnalyzing your investment plan...\n")
-            advisor.stream_advice(calculator)
+            advisor.chat(calculator)
         except Exception as e:
             print(f"\n[AI Advisor] Could not retrieve advice: {e}")
     else:
