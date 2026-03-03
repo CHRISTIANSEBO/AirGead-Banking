@@ -212,8 +212,8 @@ class AIFinancialAdvisor:
     def __init__(self, client: anthropic.Anthropic):
         self._client = client
 
-    def get_advice(self, calculator: InvestmentCalculator) -> str:
-        """Build a prompt from the calculator results and call Claude."""
+    def stream_advice(self, calculator: InvestmentCalculator) -> None:
+        """Stream investment advice token-by-token directly to stdout."""
         final_no_dep = calculator.results_no_deposit[-1]
         final_with_dep = calculator.results_with_deposit[-1]
 
@@ -239,12 +239,14 @@ Please provide:
 
 Keep your response encouraging, concise (under 200 words), and jargon-free."""
 
-        message = self._client.messages.create(
+        with self._client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
-        )
-        return message.content[0].text
+        ) as stream:
+            for text in stream.text_stream:
+                print(text, end="", flush=True)
+        print()
 
 
 # ─────────────────────────────────────────────
@@ -334,8 +336,7 @@ def main():
         try:
             advisor = AIFinancialAdvisor(client)
             print("\nAnalyzing your investment plan...\n")
-            advice = advisor.get_advice(calculator)
-            print(advice)
+            advisor.stream_advice(calculator)
         except Exception as e:
             print(f"\n[AI Advisor] Could not retrieve advice: {e}")
     else:
