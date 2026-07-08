@@ -7,12 +7,14 @@ Math calculations happen client-side in TypeScript.
 
 import os
 import json
+from pathlib import Path
 from typing import Any, Generator
 
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ─────────────────────────────────────────────
@@ -214,6 +216,36 @@ def parse_goal(request: ParseGoalRequest):
     }
 
 
+# ─────────────────────────────────────────────
+# Serve the built frontend (production single-service deploy)
+# ─────────────────────────────────────────────
+# In production the Vite frontend is built to frontend/dist and served by this
+# same app, so the API and UI share one origin (no CORS needed in prod). API
+# routes above take precedence; everything else falls back to the SPA.
+_FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/")
+    def _serve_index() -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+    @app.get("/{full_path:path}")
+    def _serve_spa(full_path: str) -> FileResponse:
+        # Serve a real static file if it exists, otherwise fall back to index.html
+        # so client-side routing works.
+        candidate = _FRONTEND_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=True)
