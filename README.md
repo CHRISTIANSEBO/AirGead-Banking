@@ -1,5 +1,9 @@
 # AirGead Banking — Investment Calculator
 
+[![Tests](https://github.com/CHRISTIANSEBO/AirGead-Banking/actions/workflows/tests.yml/badge.svg)](https://github.com/CHRISTIANSEBO/AirGead-Banking/actions/workflows/tests.yml)
+
+**[Live demo →](https://airgead-banking.up.railway.app/)**
+
 An interactive compound-interest calculator that helps users visualize how their
 investments grow over time, with and without recurring monthly deposits. Built to
 make fiscal responsibility and the power of compounding tangible and easy to explore.
