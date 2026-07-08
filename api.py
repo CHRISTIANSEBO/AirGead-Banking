@@ -21,9 +21,18 @@ from pydantic import BaseModel
 
 app = FastAPI(title="AirGead Banking API")
 
+# Allowed origins default to local dev; override in production with a
+# comma-separated ALLOWED_ORIGINS env var (e.g. "https://airgead.example.com").
+_DEFAULT_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
