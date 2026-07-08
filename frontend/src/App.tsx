@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { motion, MotionConfig } from 'framer-motion'
 import type { InvestmentParams } from './types'
 import { useCalculator } from './hooks/useCalculator'
 import { Hero } from './components/Hero'
@@ -32,6 +32,7 @@ export default function App() {
   }, [])
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="min-h-screen bg-navy-900 selection:bg-emerald-500/30">
       {/* Hero */}
       <Hero />
@@ -104,5 +105,6 @@ export default function App() {
         </footer>
       </div>
     </div>
+    </MotionConfig>
   )
 }
